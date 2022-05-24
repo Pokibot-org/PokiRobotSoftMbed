@@ -40,8 +40,14 @@ volatile int64_t enc_count[2] = {0};
 volatile int64_t enc_dir[2] = {0};
 volatile int64_t enc_offset[2] = {0};
 
+// MOTORS
+PwmOut motor_left(PB_7);
+PwmOut motor_right(PB_6);
+DigitalOut motor_dir_left(PA_14);
+DigitalOut motor_dir_right(PA_13);
+
 // Main Debug
-#define MAIN_LOOP_RATE     200ms
+#define MAIN_LOOP_RATE     2000ms
 #define MAIN_LOOP_FLAG     0x01
 Ticker mainLoopTicker;
 EventFlags mainLoopFlag;
@@ -138,6 +144,14 @@ int main() {
 	enc_offset[ENC_LEFT] = enc_count[ENC_LEFT];
 	enc_offset[ENC_RIGHT] = enc_count[ENC_RIGHT];
 
+	// Init motors
+	motor_dir_left.write(0);
+	motor_dir_right.write(0);
+	motor_left.period_us(50); //20kHz
+	motor_right.period_us(50); //20kHz
+	motor_left.write(0.0f);
+	motor_right.write(0.0f);
+
 	// Setup Lidar Thread
 	serialLidarThread.start(callback(&serialLidarEventQueue, &EventQueue::dispatch_forever));
 	serialLidar.attach(&rxLidarCallback);
@@ -154,7 +168,7 @@ int main() {
 	while (true) {
 		mainLoopFlag.wait_any(MAIN_LOOP_FLAG); // ... So instead we use a ticker to trigger a flag every second.
 
-
+//		motor_dir_left != motor_dir_left;
 		printf("Pokirobot v1 alive since %ds (enc left = %lld, enc right = %lld) ...\n", i++, enc_count[ENC_LEFT],
 			   enc_count[ENC_RIGHT]);
 
