@@ -7,6 +7,7 @@
 #include "mbed.h"
 #include "PID.h"
 #include "Biquad.h"
+#include "servo.h"
 
 // Use only if necessary, default printf with STLINK should be fine
 //UnbufferedSerial usb_serial(USBTX, USBRX, 115200);
@@ -48,8 +49,9 @@ volatile int64_t enc_count[2] = {0};
 volatile int64_t enc_dir[2] = {0};
 volatile int64_t enc_offset[2] = {0};
 
-// Servo
-PwmOut servo_0(PB_10);
+// ELECTRO AIMANT
+DigitalOut electroaimant(PC_4);
+
 
 
 // MOTORS
@@ -251,9 +253,17 @@ int main() {
 	motor_left.write(0.0f);
 	motor_right.write(0.0f);
 
+	// 0.55f buté haute
+	// 0.105f
+
+
 	// Setup servos
-	servo_0.period_ms(20);
-	servo_0.write(0.08f);
+//	electroaimant.write(1);
+//	servosTimerInit();
+//	servoSetPwmDuty(SERVO0, MG996R_MIN);
+//	ThisThread::sleep_for(2s);
+//	servoSetPwmDuty(SERVO0, MG996R_MAX);
+
 
 	// Setup Lidar Thread
 	serialLidarThread.start(callback(&serialLidarEventQueue, &EventQueue::dispatch_forever));
