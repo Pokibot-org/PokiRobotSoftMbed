@@ -21,7 +21,7 @@ DigitalOut debug_pin(PC_8);
 // LIDAR
 UnbufferedSerial serialLidar(PA_9, PA_10, 115200);
 Thread serialLidarThread;
-EventQueue serialLidarEventQueue;
+EventQueue serialLidarEventQueue(1024 * EVENTS_EVENT_SIZE);
 
 // ASSERV UPDATE
 #define ASSERV_UPDATE_RATE  1ms
@@ -48,6 +48,10 @@ volatile int64_t enc_count[2] = {0};
 volatile int64_t enc_dir[2] = {0};
 volatile int64_t enc_offset[2] = {0};
 
+// Servo
+PwmOut servo_0(PB_10);
+
+
 // MOTORS
 PwmOut motor_left(PB_7);
 PwmOut motor_right(PB_6);
@@ -60,10 +64,54 @@ DigitalOut motor_dir_right(PA_13);
 Ticker mainLoopTicker;
 EventFlags mainLoopFlag;
 
+// LIDAR
+#define LIDAR_MODE_HEADER 	0
+#define LIDAR_MODE_MSG		1
+#define LIDAR_MSG_LENGTH	32
+volatile uint8_t mode = 0;
+volatile uint8_t header_incr = 0;
+volatile uint8_t msg_incr = 0;
+volatile uint8_t msg[LIDAR_MSG_LENGTH];
+
+
 void process_serialLidarTX(char carac) {
-	printf("\t\t\t\tCharacter received from lidar : 0x%X\n", carac);
+//	printf("\t\t\t\tCharacter received from lidar : 0x%X\n", carac);
+	if(mode == LIDAR_MODE_HEADER) {
+
+		if ((header_incr == 0) && (carac == 0x55)){
+			header_incr++;
+		} else if ((header_incr == 1) && (carac == 0xAA)){
+			header_incr++;
+		} else if ((header_incr == 2) && (carac == 0x03)){
+			header_incr++;
+		} else if ((header_incr == 3) && (carac == 0x08)){
+			header_incr = 0;
+			mode = LIDAR_MODE_MSG;
+		} else {
+			//Error
+			header_incr = 0;
+			mode = LIDAR_MODE_HEADER;
+			printf("Lidar ERROR (carac = %X)\n", carac);
+		}
+
+	} else if (mode == LIDAR_MODE_MSG) {
+		msg[msg_incr] = carac;
+		msg_incr++;
+
+		if(msg_incr == LIDAR_MSG_LENGTH){
+			printf("Lidar msg Received\n");
+			mode = LIDAR_MODE_HEADER;
+			msg_incr=0;
+
+			// Do calculus
 
 
+
+		}
+
+
+
+	}
 }
 
 void rxLidarCallback() {
@@ -202,6 +250,10 @@ int main() {
 	motor_right.period_us(50); //20kHz
 	motor_left.write(0.0f);
 	motor_right.write(0.0f);
+
+	// Setup servos
+	servo_0.period_ms(20);
+	servo_0.write(0.08f);
 
 	// Setup Lidar Thread
 	serialLidarThread.start(callback(&serialLidarEventQueue, &EventQueue::dispatch_forever));
