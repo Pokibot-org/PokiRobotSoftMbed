@@ -70,45 +70,99 @@ EventFlags mainLoopFlag;
 #define LIDAR_MODE_HEADER 	0
 #define LIDAR_MODE_MSG		1
 #define LIDAR_MSG_LENGTH	32
-volatile uint8_t mode = 0;
-volatile uint8_t header_incr = 0;
-volatile uint8_t msg_incr = 0;
-volatile uint8_t msg[LIDAR_MSG_LENGTH];
+#define CAMSENSE_X1_SPEED_L_INDEX 0
+#define CAMSENSE_X1_SPEED_H_INDEX 1
+#define CAMSENSE_X1_START_ANGLE_L_INDEX 2
+#define CAMSENSE_X1_START_ANGLE_H_INDEX 3
+#define CAMSENSE_X1_END_ANGLE_L_INDEX 28
+#define CAMSENSE_X1_END_ANGLE_H_INDEX 29
+#define CAMSENSE_X1_MAX_INDEX		400
+uint8_t lidar_mode = 0;
+uint8_t lidar_header_incr = 0;
+uint8_t lidar_msg_incr = 0;
+uint8_t lidar_msg[LIDAR_MSG_LENGTH];
+float lidar_hz;
+float lidar_startAngle,lidar_endAngle;
+float lidar_offset = 16.0f; // 0 degrees seems to be 16 degrees of center.
+float lidar_IndexMultiplier = 400.0f / 360.0f;
+int lidar_index;
+uint16_t lidar_distanceArray[CAMSENSE_X1_MAX_INDEX];
+uint8_t lidar_qualityArray[CAMSENSE_X1_MAX_INDEX];
 
 
 void process_serialLidarTX(char carac) {
 //	printf("\t\t\t\tCharacter received from lidar : 0x%X\n", carac);
-	if(mode == LIDAR_MODE_HEADER) {
+	if(lidar_mode == LIDAR_MODE_HEADER) {
 
-		if ((header_incr == 0) && (carac == 0x55)){
-			header_incr++;
-		} else if ((header_incr == 1) && (carac == 0xAA)){
-			header_incr++;
-		} else if ((header_incr == 2) && (carac == 0x03)){
-			header_incr++;
-		} else if ((header_incr == 3) && (carac == 0x08)){
-			header_incr = 0;
-			mode = LIDAR_MODE_MSG;
+		if ((lidar_header_incr == 0) && (carac == 0x55)){
+			lidar_header_incr++;
+		} else if ((lidar_header_incr == 1) && (carac == 0xAA)){
+			lidar_header_incr++;
+		} else if ((lidar_header_incr == 2) && (carac == 0x03)){
+			lidar_header_incr++;
+		} else if ((lidar_header_incr == 3) && (carac == 0x08)){
+			lidar_header_incr = 0;
+			lidar_mode = LIDAR_MODE_MSG;
 		} else {
 			//Error
-			header_incr = 0;
-			mode = LIDAR_MODE_HEADER;
-			printf("Lidar ERROR (carac = %X)\n", carac);
+			lidar_header_incr = 0;
+			lidar_mode = LIDAR_MODE_HEADER;
+//			printf("Lidar ERROR (carac = %X)\n", carac);
 		}
 
-	} else if (mode == LIDAR_MODE_MSG) {
-		msg[msg_incr] = carac;
-		msg_incr++;
+	} else if (lidar_mode == LIDAR_MODE_MSG) {
+		lidar_msg[lidar_msg_incr] = carac;
+		lidar_msg_incr++;
 
-		if(msg_incr == LIDAR_MSG_LENGTH){
-			printf("Lidar msg Received\n");
-			mode = LIDAR_MODE_HEADER;
-			msg_incr=0;
+		if(lidar_msg_incr == LIDAR_MSG_LENGTH){
+//			printf("Lidar lidar_msg Received\n");
+			lidar_mode = LIDAR_MODE_HEADER;
+			lidar_msg_incr=0;
 
 			// Do calculus
+			lidar_hz = float((uint16_t) (lidar_msg[CAMSENSE_X1_SPEED_H_INDEX] << 8) | lidar_msg[CAMSENSE_X1_SPEED_L_INDEX]) / 3840.0f; // 3840.0 = (64 * 60)
+			lidar_startAngle = float(lidar_msg[CAMSENSE_X1_START_ANGLE_H_INDEX] << 8 | lidar_msg[CAMSENSE_X1_START_ANGLE_L_INDEX]) / 64.0f - 640.0f;
+			lidar_endAngle   = float(lidar_msg[CAMSENSE_X1_END_ANGLE_H_INDEX] << 8 | lidar_msg[CAMSENSE_X1_END_ANGLE_L_INDEX])   / 64.0f - 640.0f;
+
+			//Get distance
 
 
+			float step = 0.0;
+			if(lidar_endAngle > lidar_startAngle)
+			{
+				step = (lidar_endAngle - lidar_startAngle) / 8;
+			}
+			else
+			{
+				step = (lidar_endAngle - (lidar_startAngle - 360)) / 8;
+			}
 
+			for(int i = 0; i < 8; i++) // for each of the 8 samples
+			{
+				float sampleAngle = (lidar_startAngle + step * i) + (lidar_offset + 180);
+				float sampleIndexFloat = sampleAngle * lidar_IndexMultiplier; // map 0-360 to 0-400
+				int sampleIndex = round(sampleIndexFloat); // round to closest value.
+				lidar_index = sampleIndex % 400; // limit sampleIndex between 0 and 399 to prevent segmentation fault
+
+				uint8_t distanceL = lidar_msg[8+(i*3)];
+				uint8_t distanceH = lidar_msg[9+(i*3)];
+				uint8_t quality = lidar_msg[10+(i*3)];
+
+
+				if(quality == 0) // invalid data
+				{
+					lidar_distanceArray[lidar_index] = 0;
+					lidar_qualityArray[lidar_index] = 0;
+				}
+				else
+				{
+					lidar_distanceArray[lidar_index] = ((uint16_t) distanceH << 8) | distanceL;
+					lidar_qualityArray[lidar_index] = quality;
+				}
+
+//				printf("a = %f, d = %d\n", lidar_startAngle, lidar_distanceArray[lidar_index]);
+
+			}
 		}
 
 
@@ -282,11 +336,14 @@ int main() {
 		mainLoopFlag.wait_any(MAIN_LOOP_FLAG); // ... So instead we use a ticker to trigger a flag every second.
 
 //		motor_dir_left != motor_dir_left;
-		printf("Pokirobot v1 alive since %ds (pwm left = %f, speed_left = %f, dtpid = %f) ...\n",
-			   i++,
-			   motors_pwm[ENC_LEFT],
-			   motors_speed[ENC_LEFT],
-			   dt_pid);
+//		printf("Pokirobot v1 alive since %ds (lidar hz = %f, lidar start = %f, lidar end = %f, distance = %d) ...\n",
+//			   i++,
+//			   lidar_hz,
+//			   lidar_startAngle,
+//			   lidar_endAngle,
+//			   lidar_distanceArray[100]);
+
+
 
 		// more speeeeeeed
 //        sprintf(printf_buffer, "Pokirobot v1 alive since %ds (enc left = %lld) ...\n", i++,enc_count[ENC_LEFT]);
