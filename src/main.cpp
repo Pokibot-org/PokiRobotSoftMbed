@@ -23,6 +23,8 @@ DigitalOut debug_pin(PB_5);
 DigitalOut led_out_green(PC_8);
 DigitalOut led_out_red(PB_4);
 
+DigitalIn tirette(PC_9);
+
 // LIDAR
 UnbufferedSerial serialLidar(PA_9, PA_10, 115200);
 Thread serialLidarThread;
@@ -62,8 +64,8 @@ DigitalOut electroaimant(PC_4);
 // MOTORS
 PwmOut motor_left(PB_7);
 PwmOut motor_right(PB_6);
-DigitalOut motor_dir_left(PA_14);
-DigitalOut motor_dir_right(PA_13);
+DigitalOut motor_dir_left(PH_1);
+DigitalOut motor_dir_right(PA_4);
 
 // Main Debug
 #define MAIN_LOOP_RATE     500ms
@@ -440,6 +442,7 @@ int main() {
 	motor_right = 0.0f;
 
 	ThisThread::sleep_for(2s);
+//	while(tirette);
 
 	// Setup Lidar Thread
 	serialLidarThread.start(callback(&serialLidarEventQueue, &EventQueue::dispatch_forever));
