@@ -17,7 +17,7 @@
 
 // GPIO
 //DigitalOut led(LED1); CAN'T USE NUCLEO LED, USED BY SPI CLOCK (PA5)
-DigitalOut debug_pin(PC_8);
+DigitalOut led_out(PC_8);
 
 // LIDAR
 UnbufferedSerial serialLidar(PA_9, PA_10, 115200);
@@ -61,7 +61,7 @@ DigitalOut motor_dir_left(PA_14);
 DigitalOut motor_dir_right(PA_13);
 
 // Main Debug
-#define MAIN_LOOP_RATE     200ms
+#define MAIN_LOOP_RATE     1s
 #define MAIN_LOOP_FLAG     0x01
 Ticker mainLoopTicker;
 EventFlags mainLoopFlag;
@@ -77,6 +77,7 @@ EventFlags mainLoopFlag;
 #define CAMSENSE_X1_END_ANGLE_L_INDEX 28
 #define CAMSENSE_X1_END_ANGLE_H_INDEX 29
 #define CAMSENSE_X1_MAX_INDEX		400
+#define CAMSENSE_X1_MAX_PAQUET		50
 uint8_t lidar_mode = 0;
 uint8_t lidar_header_incr = 0;
 uint8_t lidar_msg_incr = 0;
@@ -88,6 +89,14 @@ float lidar_IndexMultiplier = 400.0f / 360.0f;
 int lidar_index;
 uint16_t lidar_distanceArray[CAMSENSE_X1_MAX_INDEX];
 uint8_t lidar_qualityArray[CAMSENSE_X1_MAX_INDEX];
+uint16_t lidar_distanceArray_Median[CAMSENSE_X1_MAX_PAQUET];
+
+#define LIDAR_FRONT_MIN	44
+#define LIDAR_FRONT_MAX	8
+#define LIDAR_BACK_MIN	20
+#define LIDAR_BACK_MAX	32
+#define LIDAR_TRIG_DETECT 300
+static uint8_t lidar_back_trig = 0, lidar_front_trig = 0;
 
 
 void process_serialLidarTX(char carac) {
@@ -137,6 +146,8 @@ void process_serialLidarTX(char carac) {
 				step = (lidar_endAngle - (lidar_startAngle - 360)) / 8;
 			}
 
+			uint32_t sum = 0 ;
+			uint8_t sum_num = 0;
 			for(int i = 0; i < 8; i++) // for each of the 8 samples
 			{
 				float sampleAngle = (lidar_startAngle + step * i) + (lidar_offset + 180);
@@ -144,9 +155,10 @@ void process_serialLidarTX(char carac) {
 				int sampleIndex = round(sampleIndexFloat); // round to closest value.
 				lidar_index = sampleIndex % 400; // limit sampleIndex between 0 and 399 to prevent segmentation fault
 
-				uint8_t distanceL = lidar_msg[8+(i*3)];
-				uint8_t distanceH = lidar_msg[9+(i*3)];
-				uint8_t quality = lidar_msg[10+(i*3)];
+
+				uint8_t distanceL = lidar_msg[4+(i*3)];
+				uint8_t distanceH = lidar_msg[5+(i*3)];
+				uint8_t quality = lidar_msg[6+(i*3)];
 
 
 				if(quality == 0) // invalid data
@@ -158,16 +170,49 @@ void process_serialLidarTX(char carac) {
 				{
 					lidar_distanceArray[lidar_index] = ((uint16_t) distanceH << 8) | distanceL;
 					lidar_qualityArray[lidar_index] = quality;
+					sum += lidar_distanceArray[lidar_index];
+					sum_num++;
 				}
 
-//				printf("a = %f, d = %d\n", lidar_startAngle, lidar_distanceArray[lidar_index]);
 
+
+//				median += lidar_distanceArray[lidar_index];
+//				printf("a = %f, d = %d\n", lidar_startAngle, lidar_distanceArray[lidar_index]);
 			}
+
+			lidar_distanceArray_Median[(lidar_index / 8)] = sum_num == 0 ? 0xFFFF : uint16_t(sum / sum_num);
+//			printf("a = %d, d = %d\n", (lidar_index / 8), lidar_distanceArray_Median[(lidar_index / 8)]);
 		}
 
 
 
 	}
+}
+
+void updateLidarDetect(){
+
+	// back
+	for (int index = LIDAR_BACK_MIN ; index < LIDAR_BACK_MAX ; index++){
+//		printf("%d,%d\n", index, lidar_distanceArray_Median[index]);
+		lidar_back_trig = 0;
+		if (lidar_distanceArray_Median[index] < LIDAR_TRIG_DETECT){
+			lidar_back_trig = 1;
+			break;
+		}
+	}
+
+	// front
+	for (int index = LIDAR_FRONT_MIN ; index < (CAMSENSE_X1_MAX_PAQUET + LIDAR_FRONT_MAX) ; index++){
+
+//		printf("%d,%d\n", index, lidar_distanceArray_Median[index]);
+		lidar_front_trig = 0;
+		if (lidar_distanceArray_Median[index % CAMSENSE_X1_MAX_PAQUET] < LIDAR_TRIG_DETECT){
+			lidar_front_trig = 1;
+			break;
+		}
+	}
+
+
 }
 
 void rxLidarCallback() {
@@ -245,7 +290,17 @@ void asservUpdate() {
 	while (true) {
 		// Wait for trig
 		asservFlag.wait_any(ASSERV_FLAG);
-		debug_pin = 1;
+//		debug_pin = 1;
+
+
+		// Update lidar detect
+		updateLidarDetect();
+
+		if(lidar_back_trig || lidar_front_trig)
+			led_out = 1;
+		else
+			led_out = 0;
+
 		// Update codeurs
 		encoderUpdate(ENC_LEFT);
 		encoderUpdate(ENC_RIGHT);
@@ -269,7 +324,7 @@ void asservUpdate() {
 
 //		motor_left.write(motors_pwm[ENC_LEFT]);
 
-		debug_pin = 0;
+//		debug_pin = 0;
 	}
 
 }
@@ -285,7 +340,7 @@ void mainLoopUpdate() {
 
 int main() {
 	// Initialize GPIO
-	debug_pin = 0;
+//	debug_pin = 0;
 
 	// Init encodeurs SPI
 	enc_left_cs = 1;
@@ -307,13 +362,8 @@ int main() {
 	motor_left.write(0.0f);
 	motor_right.write(0.0f);
 
-	// 0.55f buté haute
-	// 0.105f
-
-
 	// Setup servos
-//	electroaimant.write(1);
-//	servosTimerInit();
+	servosTimerInit();
 //	servoSetPwmDuty(SERVO0, MG996R_MIN);
 //	ThisThread::sleep_for(2s);
 //	servoSetPwmDuty(SERVO0, MG996R_MAX);
@@ -335,13 +385,20 @@ int main() {
 	while (true) {
 		mainLoopFlag.wait_any(MAIN_LOOP_FLAG); // ... So instead we use a ticker to trigger a flag every second.
 
-//		motor_dir_left != motor_dir_left;
-//		printf("Pokirobot v1 alive since %ds (lidar hz = %f, lidar start = %f, lidar end = %f, distance = %d) ...\n",
-//			   i++,
-//			   lidar_hz,
-//			   lidar_startAngle,
-//			   lidar_endAngle,
-//			   lidar_distanceArray[100]);
+
+		motor_dir_left != motor_dir_left;
+		printf("Pokirobot v1 alive since %ds (lidar hz = %f, back trig = %d) ...\n",
+			   i++,
+			   lidar_hz,
+			   lidar_back_trig);
+
+//		for(int a =0 ; a<CAMSENSE_X1_MAX_PAQUET ; a++){
+//			printf("%d;%d\n", a, lidar_distanceArray_Median[a]);
+//		}
+
+//		for(int a =0 ; a<CAMSENSE_X1_MAX_INDEX; a++){
+//			printf("%d;%d;%d\n", a, lidar_distanceArray[a], lidar_qualityArray[a]);
+//		}
 
 
 
