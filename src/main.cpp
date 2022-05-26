@@ -17,7 +17,11 @@
 
 // GPIO
 //DigitalOut led(LED1); CAN'T USE NUCLEO LED, USED BY SPI CLOCK (PA5)
-DigitalOut led_out(PC_8);
+
+DigitalOut debug_pin(PB_5);
+
+DigitalOut led_out_green(PC_8);
+DigitalOut led_out_red(PB_4);
 
 // LIDAR
 UnbufferedSerial serialLidar(PA_9, PA_10, 115200);
@@ -31,9 +35,9 @@ EventFlags asservFlag;
 Ticker asservTicker;
 Thread asservThread(osPriorityRealtime);
 sixtron::PID *pid_left, *pid_right;
-volatile float motors_speed[2] = {0.0f};
-volatile float motors_pwm[2] = {0.0f};
-volatile float dt_pid = 0.0f;
+float motors_speed[2] = {0.0f};
+float motors_pwm[2] = {0.0f};
+float dt_pid = 0.0f;
 Biquad filter_speed_left, filter_speed_right;
 
 // ENCODERS
@@ -43,11 +47,12 @@ Biquad filter_speed_left, filter_speed_right;
 SPI spiAS5047p(PA_7, PA_6, PA_5); // mosi, miso, sclk
 DigitalOut enc_left_cs(PA_8);
 DigitalOut enc_right_cs(PB_2);
-volatile uint16_t enc_raw[2] = {0};
-volatile int32_t enc_revol[2] = {0};
-volatile int64_t enc_count[2] = {0};
-volatile int64_t enc_dir[2] = {0};
-volatile int64_t enc_offset[2] = {0};
+uint16_t enc_raw[2] = {0};
+int32_t enc_revol[2] = {0};
+int64_t enc_count[2] = {0};
+int64_t enc_old_count[2] = {0};
+int64_t enc_dir[2] = {0};
+int64_t enc_offset[2] = {0};
 
 // ELECTRO AIMANT
 DigitalOut electroaimant(PC_4);
@@ -61,7 +66,7 @@ DigitalOut motor_dir_left(PA_14);
 DigitalOut motor_dir_right(PA_13);
 
 // Main Debug
-#define MAIN_LOOP_RATE     1s
+#define MAIN_LOOP_RATE     500ms
 #define MAIN_LOOP_FLAG     0x01
 Ticker mainLoopTicker;
 EventFlags mainLoopFlag;
@@ -258,6 +263,28 @@ void encoderUpdate(int encoder) {
 
 }
 
+void motorUpdate(int enc, DigitalOut *dir, PwmOut *motor, sixtron::PID *pid_motor, Biquad *filter, sixtron::PID_args *args){
+
+	motors_speed[enc] = filter->process((float((enc_count[enc]) - enc_old_count[enc])) / dt_pid);
+	enc_old_count[enc] = enc_count[enc];
+
+	args->actual = motors_speed[enc];
+
+	pid_motor->compute(args);
+
+	motors_pwm[enc] = args->output;
+
+	// update motor PWM
+	if (motors_pwm[enc] >= 0.0f) {
+		dir->write(0);
+	} else {
+		motors_pwm[enc] = -motors_pwm[enc];
+		dir->write(1);
+	}
+
+	motor->write(motors_pwm[enc]);
+}
+
 void asservUpdate() {
 
 	// Convert current rate of the loop in seconds (float)
@@ -275,56 +302,52 @@ void asservUpdate() {
 	pid_right = new sixtron::PID(pid_params);
 
 	pid_left->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
+	pid_right->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
 
 	sixtron::PID_args args_motor_left, args_motor_right;
 
-	args_motor_left.target = 200000.0f;
-
 	// Update just in case
 	filter_speed_left.setBiquad(bq_type_lowpass, 20.0f * dt_pid, 0.707f, 0.0f);
+	filter_speed_right.setBiquad(bq_type_lowpass, 20.0f * dt_pid, 0.707f, 0.0f);
 	encoderUpdate(ENC_LEFT);
 	encoderUpdate(ENC_RIGHT);
 
-	int64_t old_count_left = enc_count[ENC_LEFT];
+	int64_t old_count[2];
+	old_count[ENC_LEFT] = enc_count[ENC_LEFT];
+	old_count[ENC_RIGHT] = enc_count[ENC_RIGHT];
+
+	int32_t yolo=0;
 
 	while (true) {
 		// Wait for trig
 		asservFlag.wait_any(ASSERV_FLAG);
-//		debug_pin = 1;
-
+		yolo ++;
+		debug_pin = 1;
 
 		// Update lidar detect
 		updateLidarDetect();
-
-		if(lidar_back_trig || lidar_front_trig)
-			led_out = 1;
-		else
-			led_out = 0;
+		led_out_green = !!lidar_front_trig ;
+		led_out_red = !!lidar_back_trig ;
 
 		// Update codeurs
 		encoderUpdate(ENC_LEFT);
 		encoderUpdate(ENC_RIGHT);
 
-		// update speed
-		motors_speed[ENC_LEFT] = filter_speed_left.process((float((enc_count[ENC_LEFT]) - old_count_left)) / dt_pid);
-		old_count_left = enc_count[ENC_LEFT];
-
-		// Update args and compute
-		args_motor_left.actual = motors_speed[ENC_LEFT];
-		pid_left->compute(&args_motor_left);
-		motors_pwm[ENC_LEFT] = args_motor_left.output;
-
-		// update motor PWM
-		if (motors_pwm[ENC_LEFT] >= 0.0f) {
-			motor_dir_left.write(0);
+		// Update target
+		if (yolo < 5000){
+			args_motor_left.target = 200000.0f;
+			args_motor_right.target = 400000.0f;
 		} else {
-			motors_pwm[ENC_LEFT] = -motors_pwm[ENC_LEFT];
-			motor_dir_left.write(1);
+			args_motor_left.target = 0.0f;
+			args_motor_right.target = 0.0f;
 		}
 
-//		motor_left.write(motors_pwm[ENC_LEFT]);
 
-//		debug_pin = 0;
+		// Update motors
+		motorUpdate(ENC_LEFT, &motor_dir_left, &motor_left, pid_left, &filter_speed_left, &args_motor_left);
+		motorUpdate(ENC_RIGHT, &motor_dir_right, &motor_right, pid_right, &filter_speed_right, &args_motor_right);
+
+		debug_pin = 0;
 	}
 
 }
@@ -387,10 +410,10 @@ int main() {
 
 
 		motor_dir_left != motor_dir_left;
-		printf("Pokirobot v1 alive since %ds (lidar hz = %f, back trig = %d) ...\n",
+		printf("Pokirobot v1 alive since %ds (speed L = %f, speed R = %f) ...\n",
 			   i++,
-			   lidar_hz,
-			   lidar_back_trig);
+			   motors_speed[ENC_LEFT],
+			   motors_speed[ENC_RIGHT]);
 
 //		for(int a =0 ; a<CAMSENSE_X1_MAX_PAQUET ; a++){
 //			printf("%d;%d\n", a, lidar_distanceArray_Median[a]);

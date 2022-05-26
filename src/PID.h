@@ -169,6 +169,7 @@ namespace sixtron {
         float _limit_out_low;
 
         // PID calculs
+		float _target_clamped, _target_delta_limit;
         float _err, _err_previous, _i_count;
         float _p, _i, _d; // Corrector terms
         float _d_input, _d_input_previous; // used for parallel and serie PID

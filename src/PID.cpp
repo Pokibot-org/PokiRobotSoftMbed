@@ -24,20 +24,22 @@
 namespace sixtron {
 
     PID::PID(float Kp, float Ki, float Kd, float dt_seconds, float Kf, PID_format format, bool anti_windup) :
-            _format(format),
-            _dt(dt_seconds),
-            _kp(Kp),
-            _ki(Ki),
-            _kd(Kd),
-            _kf(Kf),
-            _err(0.0f),
-            _err_previous(0.0f),
-            _i_count(0.0f),
-            _d_input_previous(0.0f),
-            _output_previous(0.0f),
-            _anti_windup(anti_windup),
-            _output_clamp(false),
-            _i_count_previous(0.0f) {
+			_format(format),
+			_dt(dt_seconds),
+			_kp(Kp),
+			_ki(Ki),
+			_kd(Kd),
+			_kf(Kf),
+			_target_clamped(0.0f),
+			_target_delta_limit(1000.0f),
+			_err(0.0f),
+			_err_previous(0.0f),
+			_i_count(0.0f),
+			_d_input_previous(0.0f),
+			_output_previous(0.0f),
+			_anti_windup(anti_windup),
+			_output_clamp(false),
+			_i_count_previous(0.0f) {
 
         // Tf must be superior or equal to _dt, it's not a filter otherwise.
         if (_kf < 1.0f)
@@ -67,14 +69,26 @@ namespace sixtron {
     // Must be called periodically
     void PID::compute(PID_args *args) {
 
-        // Clamp input
-        if ((_limit_in_high != 0.0f) && ((args->target + args->feedForward) > _limit_in_high))
-            args->target = _limit_in_high;
-        if ((_limit_in_low != 0.0f) && ((args->target + args->feedForward) < _limit_in_low))
-            args->target = _limit_in_low;
+		// RAMP
+		if ((args->target - _target_clamped) > _target_delta_limit){
+			_target_clamped += _target_delta_limit;
+
+		} else if ((args->target - _target_clamped) < -_target_delta_limit){
+			_target_clamped += - _target_delta_limit;
+
+		} else {
+			_target_clamped = args->target;
+
+		}
+
+        // cap input
+        if ((_limit_in_high != 0.0f) && ((_target_clamped + args->feedForward) > _limit_in_high))
+			_target_clamped = _limit_in_high;
+        if ((_limit_in_low != 0.0f) && ((_target_clamped + args->feedForward) < _limit_in_low))
+			_target_clamped = _limit_in_low;
 
         // Calcul the error depending on the target
-        _err = (args->target + args->feedForward) - args->actual;
+        _err = (_target_clamped + args->feedForward) - args->actual;
 
         // Compute using the right PID
         if (_format == PID_Parallel) { // default
