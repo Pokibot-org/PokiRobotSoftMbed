@@ -46,7 +46,7 @@ Biquad filter_speed_left, filter_speed_right;
 #define ENC_LEFT 0
 #define ENC_RIGHT 1
 #define ENC_REVOLUTION 16384
-#define MOTOR_REDUCTION	50
+#define MOTOR_REDUCTION    50
 SPI spiAS5047p(PA_7, PA_6, PA_5); // mosi, miso, sclk
 DigitalOut enc_left_cs(PA_8);
 DigitalOut enc_right_cs(PB_2);
@@ -108,16 +108,16 @@ static uint8_t lidar_back_trig = 0, lidar_front_trig = 0;
 // ODOMETRY
 #define TICK_PER_REVOL (ENC_REVOLUTION * MOTOR_REDUCTION)
 #define TICK_PER_180 (TICK_PER_REVOL / 2.0f)
-#define WHEEL_PERIMETER_MM	(2.0f * float(M_PI) * 35.0f)
+#define WHEEL_PERIMETER_MM    (2.0f * float(M_PI) * 35.0f)
 #define TICK_PER_MM ((1.0f / (WHEEL_PERIMETER_MM)) * TICK_PER_REVOL)
-#define MM_PER_TICK	(1.0f / TICK_PER_MM)
+#define MM_PER_TICK    (1.0f / TICK_PER_MM)
 #define TICK2RAD(tick)  (((float(tick)) * float(M_PI)) / ((float)TICK_PER_180))
 #define TICK2DEG(tick)  (((float(tick)) * 180.0f) / ((float)TICK_PER_180))
 #define TICK2MM(tick)  (((float(tick))) * MM_PER_TICK)
 #define MM2TICK(mm)  ((float(mm)) * TICK_PER_MM)
 #define DEG2TICK(deg)  (((float(deg)) / 180.0f) * ((float)TICK_PER_180))
 
-#define TICK_PER_ROBOT_REVOL	7340000
+#define TICK_PER_ROBOT_REVOL    7340000
 #define THETA_TICK2DEG(tick) (((float(tick)) * 180.0f) / (float(TICK_PER_ROBOT_REVOL/2.0f)))
 
 static float robot_x = 0.0f, robot_y = 0.0f;
@@ -306,25 +306,26 @@ void motorUpdate(int enc, DigitalOut *dir, PwmOut *motor, sixtron::PID *pid_moto
 void odometryUpdate() {
 
 	//compute curvilinear distance
-	int64_t new_distance = (enc_count[ENC_LEFT] + enc_count[ENC_RIGHT]) / 2 ;
+	int64_t new_distance = (enc_count[ENC_LEFT] + enc_count[ENC_RIGHT]) / 2;
 	int64_t delta_distance = new_distance - robot_distance;
 
 	//compute new angle value
-	int64_t new_angle = enc_count[ENC_LEFT] - enc_count[ENC_RIGHT] + robot_angle_offset;
+	int64_t new_angle = (enc_count[ENC_RIGHT] - enc_count[ENC_LEFT]);
 	int64_t delta_angle = new_angle - robot_angle;
+//	float delta_anglef = float(delta_angle) / float(TICK_PER_ROBOT_REVOL) * float(M_PI) * 2.0f;
 
 	//compute X/Y coordinates
-	float mid_angle = TICK2RAD(robot_angle + delta_angle / 2.0f);
-	float dx = float(delta_distance) * cos(mid_angle);
-	float dy = float(delta_distance) * sin(mid_angle);
+	float mid_angle = THETA_TICK2DEG(robot_angle + delta_angle / 2.0f);
+	float dx = float(delta_distance) * cosf(mid_angle/180.0f*float(M_PI));
+	float dy = float(delta_distance) * sinf(mid_angle/180.0f*float(M_PI));
 	robot_x += dx;
 	robot_y += dy;
 
 	//update global values
-	robot_angle = new_angle;
-	robot_distance = new_distance;
-	robot_linear_speed = delta_distance;
-	robot_angular_velocity = delta_angle;
+	robot_angle += delta_angle;
+	robot_distance += delta_distance;
+//	robot_linear_speed = delta_distance;
+//	robot_angular_velocity = delta_angle;
 
 }
 
@@ -358,7 +359,9 @@ void asservUpdate() {
 	old_count[ENC_LEFT] = enc_count[ENC_LEFT];
 	old_count[ENC_RIGHT] = enc_count[ENC_RIGHT];
 
-	int32_t yolo=0;
+	int32_t yolo = 0;
+
+	uint8_t carre = 0;
 
 	while (true) {
 		// Wait for trig
@@ -378,15 +381,64 @@ void asservUpdate() {
 		odometryUpdate();
 
 		// Update target
+
+		switch (carre) {
+			case 0:
+				args_motor_left.target = 500000.0f;
+				args_motor_right.target = 500000.0f;
+				if (TICK2MM(robot_x) > 500.0f)
+					carre++;
+				break;
+			case 1:
+				args_motor_left.target = 300000.0f;
+				args_motor_right.target = -300000.0f;
+				if (THETA_TICK2DEG(robot_angle) < -90.0f)
+					carre++;
+				break;
+			case 2:
+				args_motor_left.target = 500000.0f;
+				args_motor_right.target = 500000.0f;
+				if (TICK2MM(robot_y) < -500.0f)
+					carre++;
+				break;
+			case 3:
+				args_motor_left.target = 300000.0f;
+				args_motor_right.target = -300000.0f;
+				if (THETA_TICK2DEG(robot_angle) < -180.0f)
+					carre++;
+				break;
+			case 4:
+				args_motor_left.target = 500000.0f;
+				args_motor_right.target = 500000.0f;
+				if (TICK2MM(robot_x) < 0.0f)
+					carre++;
+				break;
+			case 5:
+				args_motor_left.target = 300000.0f;
+				args_motor_right.target = -300000.0f;
+				if (THETA_TICK2DEG(robot_angle) < -270.0f)
+					carre++;
+				break;
+			case 6:
+				args_motor_left.target = 500000.0f;
+				args_motor_right.target = 500000.0f;
+				if (TICK2MM(robot_y) > 0.0f)
+					carre++;
+				break;
+			case 7:
+				args_motor_left.target = 300000.0f;
+				args_motor_right.target = -300000.0f;
+				if (THETA_TICK2DEG(robot_angle) < -360.0f)
+					carre++;
+				break;
+			case 8:
+				args_motor_left.target = 0.0f;
+				args_motor_right.target = 0.0f;
+		}
+
+
 //		if (yolo < 5000) {
 //		if (robot_angle > (-3*TICK_PER_ROBOT_REVOL)){
-		if (TICK2MM(robot_x) < 1000.0f){
-			args_motor_left.target = 500000.0f;
-			args_motor_right.target = 500000.0f;
-		} else {
-			args_motor_left.target = 0.0f;
-			args_motor_right.target = 0.0f;
-		}
 
 
 		// Update motors
