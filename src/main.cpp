@@ -118,6 +118,7 @@ static uint8_t lidar_back_trig = 0, lidar_front_trig = 0;
 #define DEG2TICK(deg)  (((float(deg)) / 180.0f) * ((float)TICK_PER_180))
 
 #define TICK_PER_ROBOT_REVOL	7340000
+#define THETA_TICK2DEG(tick) (((float(tick)) * 180.0f) / (float(TICK_PER_ROBOT_REVOL/2.0f)))
 
 static float robot_x = 0.0f, robot_y = 0.0f;
 static int64_t robot_distance = 0, robot_angle = 0, robot_angle_offset = 0;
@@ -305,7 +306,7 @@ void motorUpdate(int enc, DigitalOut *dir, PwmOut *motor, sixtron::PID *pid_moto
 void odometryUpdate() {
 
 	//compute curvilinear distance
-	int64_t new_distance = enc_count[ENC_LEFT] + enc_count[ENC_RIGHT];
+	int64_t new_distance = (enc_count[ENC_LEFT] + enc_count[ENC_RIGHT]) / 2 ;
 	int64_t delta_distance = new_distance - robot_distance;
 
 	//compute new angle value
@@ -357,12 +358,11 @@ void asservUpdate() {
 	old_count[ENC_LEFT] = enc_count[ENC_LEFT];
 	old_count[ENC_RIGHT] = enc_count[ENC_RIGHT];
 
-	int32_t yolo = 0;
+	int32_t yolo=0;
 
 	while (true) {
 		// Wait for trig
 		asservFlag.wait_any(ASSERV_FLAG);
-		yolo++;
 		debug_pin = 1;
 
 		// Update lidar detect
@@ -378,9 +378,10 @@ void asservUpdate() {
 		odometryUpdate();
 
 		// Update target
-//		if (yolo < 11000) {
-		if (robot_angle > (-1*TICK_PER_ROBOT_REVOL)){
-			args_motor_left.target = -500000.0f;
+//		if (yolo < 5000) {
+//		if (robot_angle > (-3*TICK_PER_ROBOT_REVOL)){
+		if (TICK2MM(robot_x) < 1000.0f){
+			args_motor_left.target = 500000.0f;
 			args_motor_right.target = 500000.0f;
 		} else {
 			args_motor_left.target = 0.0f;
@@ -454,7 +455,7 @@ int main() {
 	asservThread.start(asservUpdate);
 	asservTicker.attach(&asservSetFlag, ASSERV_UPDATE_RATE);
 
-	ThisThread::sleep_for(2s);
+//	ThisThread::sleep_for(2s);
 
 	// Main setup
 	mainLoopTicker.attach(&mainLoopUpdate, MAIN_LOOP_RATE);
@@ -466,11 +467,12 @@ int main() {
 
 
 		motor_dir_left != motor_dir_left;
-		printf("Pokirobot v1 alive since %ds (X= %f, speed Y = %f, angle = %lld) ...\n",
+		printf("Pokirobot v1 alive since %ds (X= %f, speed Y = %f, angle = %f, codeur = %lld) ...\n",
 			   i++,
 			   TICK2MM(robot_x),
 			   TICK2MM(robot_y),
-			   robot_angle);
+			   THETA_TICK2DEG(robot_angle),
+			   enc_count[ENC_RIGHT]);
 
 //		for(int a =0 ; a<CAMSENSE_X1_MAX_PAQUET ; a++){
 //			printf("%d;%d\n", a, lidar_distanceArray_Median[a]);
