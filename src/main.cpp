@@ -35,28 +35,28 @@ EventFlags asservFlag;
 Ticker asservTicker;
 Thread asservThread(osPriorityRealtime);
 sixtron::PID *pid_left, *pid_right;
-float motors_speed[2] = {0.0f};
-float motors_pwm[2] = {0.0f};
-float dt_pid = 0.0f;
+static float motors_speed[2] = {0.0f};
+static float motors_pwm[2] = {0.0f};
+static float dt_pid = 0.0f;
 Biquad filter_speed_left, filter_speed_right;
 
 // ENCODERS
 #define ENC_LEFT 0
 #define ENC_RIGHT 1
 #define ENC_REVOLUTION 16384
+#define MOTOR_REDUCTION	50
 SPI spiAS5047p(PA_7, PA_6, PA_5); // mosi, miso, sclk
 DigitalOut enc_left_cs(PA_8);
 DigitalOut enc_right_cs(PB_2);
-uint16_t enc_raw[2] = {0};
-int32_t enc_revol[2] = {0};
-int64_t enc_count[2] = {0};
-int64_t enc_old_count[2] = {0};
-int64_t enc_dir[2] = {0};
-int64_t enc_offset[2] = {0};
+static uint16_t enc_raw[2] = {0};
+static int32_t enc_revol[2] = {0};
+static int64_t enc_count[2] = {0};
+static int64_t enc_old_count[2] = {0};
+static int64_t enc_dir[2] = {0};
+static int64_t enc_offset[2] = {0};
 
 // ELECTRO AIMANT
 DigitalOut electroaimant(PC_4);
-
 
 
 // MOTORS
@@ -72,49 +72,67 @@ Ticker mainLoopTicker;
 EventFlags mainLoopFlag;
 
 // LIDAR
-#define LIDAR_MODE_HEADER 	0
-#define LIDAR_MODE_MSG		1
-#define LIDAR_MSG_LENGTH	32
+#define LIDAR_MODE_HEADER    0
+#define LIDAR_MODE_MSG        1
+#define LIDAR_MSG_LENGTH    32
 #define CAMSENSE_X1_SPEED_L_INDEX 0
 #define CAMSENSE_X1_SPEED_H_INDEX 1
 #define CAMSENSE_X1_START_ANGLE_L_INDEX 2
 #define CAMSENSE_X1_START_ANGLE_H_INDEX 3
 #define CAMSENSE_X1_END_ANGLE_L_INDEX 28
 #define CAMSENSE_X1_END_ANGLE_H_INDEX 29
-#define CAMSENSE_X1_MAX_INDEX		400
-#define CAMSENSE_X1_MAX_PAQUET		50
-uint8_t lidar_mode = 0;
-uint8_t lidar_header_incr = 0;
-uint8_t lidar_msg_incr = 0;
-uint8_t lidar_msg[LIDAR_MSG_LENGTH];
-float lidar_hz;
-float lidar_startAngle,lidar_endAngle;
-float lidar_offset = 16.0f; // 0 degrees seems to be 16 degrees of center.
-float lidar_IndexMultiplier = 400.0f / 360.0f;
-int lidar_index;
-uint16_t lidar_distanceArray[CAMSENSE_X1_MAX_INDEX];
-uint8_t lidar_qualityArray[CAMSENSE_X1_MAX_INDEX];
-uint16_t lidar_distanceArray_Median[CAMSENSE_X1_MAX_PAQUET];
+#define CAMSENSE_X1_MAX_INDEX        400
+#define CAMSENSE_X1_MAX_PAQUET        50
+static uint8_t lidar_mode = 0;
+static uint8_t lidar_header_incr = 0;
+static uint8_t lidar_msg_incr = 0;
+static uint8_t lidar_msg[LIDAR_MSG_LENGTH];
+static float lidar_hz;
+static float lidar_startAngle, lidar_endAngle;
+static float lidar_offset = 16.0f; // 0 degrees seems to be 16 degrees of center.
+static float lidar_IndexMultiplier = 400.0f / 360.0f;
+static int lidar_index;
+static uint16_t lidar_distanceArray[CAMSENSE_X1_MAX_INDEX];
+static uint8_t lidar_qualityArray[CAMSENSE_X1_MAX_INDEX];
+static uint16_t lidar_distanceArray_Median[CAMSENSE_X1_MAX_PAQUET];
 
-#define LIDAR_FRONT_MIN	44
-#define LIDAR_FRONT_MAX	8
-#define LIDAR_BACK_MIN	20
-#define LIDAR_BACK_MAX	32
+#define LIDAR_FRONT_MIN    44
+#define LIDAR_FRONT_MAX    8
+#define LIDAR_BACK_MIN    20
+#define LIDAR_BACK_MAX    32
 #define LIDAR_TRIG_DETECT 300
 static uint8_t lidar_back_trig = 0, lidar_front_trig = 0;
+
+// ODOMETRY
+#define TICK_PER_REVOL (ENC_REVOLUTION * MOTOR_REDUCTION)
+#define TICK_PER_180 (TICK_PER_REVOL / 2.0f)
+#define WHEEL_PERIMETER_MM	(2.0f * float(M_PI) * 35.0f)
+#define TICK_PER_MM ((1.0f / (WHEEL_PERIMETER_MM)) * TICK_PER_REVOL)
+#define MM_PER_TICK	(1.0f / TICK_PER_MM)
+#define TICK2RAD(tick)  (((float(tick)) * float(M_PI)) / ((float)TICK_PER_180))
+#define TICK2DEG(tick)  (((float(tick)) * 180.0f) / ((float)TICK_PER_180))
+#define TICK2MM(tick)  (((float(tick))) * MM_PER_TICK)
+#define MM2TICK(mm)  ((float(mm)) * TICK_PER_MM)
+#define DEG2TICK(deg)  (((float(deg)) / 180.0f) * ((float)TICK_PER_180))
+
+#define TICK_PER_ROBOT_REVOL	7340000
+
+static float robot_x = 0.0f, robot_y = 0.0f;
+static int64_t robot_distance = 0, robot_angle = 0, robot_angle_offset = 0;
+static int64_t robot_linear_speed = 0, robot_angular_velocity = 0;
 
 
 void process_serialLidarTX(char carac) {
 //	printf("\t\t\t\tCharacter received from lidar : 0x%X\n", carac);
-	if(lidar_mode == LIDAR_MODE_HEADER) {
+	if (lidar_mode == LIDAR_MODE_HEADER) {
 
-		if ((lidar_header_incr == 0) && (carac == 0x55)){
+		if ((lidar_header_incr == 0) && (carac == 0x55)) {
 			lidar_header_incr++;
-		} else if ((lidar_header_incr == 1) && (carac == 0xAA)){
+		} else if ((lidar_header_incr == 1) && (carac == 0xAA)) {
 			lidar_header_incr++;
-		} else if ((lidar_header_incr == 2) && (carac == 0x03)){
+		} else if ((lidar_header_incr == 2) && (carac == 0x03)) {
 			lidar_header_incr++;
-		} else if ((lidar_header_incr == 3) && (carac == 0x08)){
+		} else if ((lidar_header_incr == 3) && (carac == 0x08)) {
 			lidar_header_incr = 0;
 			lidar_mode = LIDAR_MODE_MSG;
 		} else {
@@ -128,32 +146,34 @@ void process_serialLidarTX(char carac) {
 		lidar_msg[lidar_msg_incr] = carac;
 		lidar_msg_incr++;
 
-		if(lidar_msg_incr == LIDAR_MSG_LENGTH){
+		if (lidar_msg_incr == LIDAR_MSG_LENGTH) {
 //			printf("Lidar lidar_msg Received\n");
 			lidar_mode = LIDAR_MODE_HEADER;
-			lidar_msg_incr=0;
+			lidar_msg_incr = 0;
 
 			// Do calculus
-			lidar_hz = float((uint16_t) (lidar_msg[CAMSENSE_X1_SPEED_H_INDEX] << 8) | lidar_msg[CAMSENSE_X1_SPEED_L_INDEX]) / 3840.0f; // 3840.0 = (64 * 60)
-			lidar_startAngle = float(lidar_msg[CAMSENSE_X1_START_ANGLE_H_INDEX] << 8 | lidar_msg[CAMSENSE_X1_START_ANGLE_L_INDEX]) / 64.0f - 640.0f;
-			lidar_endAngle   = float(lidar_msg[CAMSENSE_X1_END_ANGLE_H_INDEX] << 8 | lidar_msg[CAMSENSE_X1_END_ANGLE_L_INDEX])   / 64.0f - 640.0f;
+			lidar_hz = float((uint16_t) (lidar_msg[CAMSENSE_X1_SPEED_H_INDEX] << 8) | lidar_msg[CAMSENSE_X1_SPEED_L_INDEX]) /
+					   3840.0f; // 3840.0 = (64 * 60)
+			lidar_startAngle =
+					float(lidar_msg[CAMSENSE_X1_START_ANGLE_H_INDEX] << 8 | lidar_msg[CAMSENSE_X1_START_ANGLE_L_INDEX]) / 64.0f -
+					640.0f;
+			lidar_endAngle =
+					float(lidar_msg[CAMSENSE_X1_END_ANGLE_H_INDEX] << 8 | lidar_msg[CAMSENSE_X1_END_ANGLE_L_INDEX]) / 64.0f -
+					640.0f;
 
 			//Get distance
 
 
 			float step = 0.0;
-			if(lidar_endAngle > lidar_startAngle)
-			{
+			if (lidar_endAngle > lidar_startAngle) {
 				step = (lidar_endAngle - lidar_startAngle) / 8;
-			}
-			else
-			{
+			} else {
 				step = (lidar_endAngle - (lidar_startAngle - 360)) / 8;
 			}
 
-			uint32_t sum = 0 ;
+			uint32_t sum = 0;
 			uint8_t sum_num = 0;
-			for(int i = 0; i < 8; i++) // for each of the 8 samples
+			for (int i = 0; i < 8; i++) // for each of the 8 samples
 			{
 				float sampleAngle = (lidar_startAngle + step * i) + (lidar_offset + 180);
 				float sampleIndexFloat = sampleAngle * lidar_IndexMultiplier; // map 0-360 to 0-400
@@ -161,25 +181,21 @@ void process_serialLidarTX(char carac) {
 				lidar_index = sampleIndex % 400; // limit sampleIndex between 0 and 399 to prevent segmentation fault
 
 
-				uint8_t distanceL = lidar_msg[4+(i*3)];
-				uint8_t distanceH = lidar_msg[5+(i*3)];
-				uint8_t quality = lidar_msg[6+(i*3)];
+				uint8_t distanceL = lidar_msg[4 + (i * 3)];
+				uint8_t distanceH = lidar_msg[5 + (i * 3)];
+				uint8_t quality = lidar_msg[6 + (i * 3)];
 
 
-				if(quality == 0) // invalid data
+				if (quality == 0) // invalid data
 				{
 					lidar_distanceArray[lidar_index] = 0;
 					lidar_qualityArray[lidar_index] = 0;
-				}
-				else
-				{
+				} else {
 					lidar_distanceArray[lidar_index] = ((uint16_t) distanceH << 8) | distanceL;
 					lidar_qualityArray[lidar_index] = quality;
 					sum += lidar_distanceArray[lidar_index];
 					sum_num++;
 				}
-
-
 
 //				median += lidar_distanceArray[lidar_index];
 //				printf("a = %f, d = %d\n", lidar_startAngle, lidar_distanceArray[lidar_index]);
@@ -190,28 +206,27 @@ void process_serialLidarTX(char carac) {
 		}
 
 
-
 	}
 }
 
-void updateLidarDetect(){
+void updateLidarDetect() {
 
 	// back
-	for (int index = LIDAR_BACK_MIN ; index < LIDAR_BACK_MAX ; index++){
+	for (int index = LIDAR_BACK_MIN; index < LIDAR_BACK_MAX; index++) {
 //		printf("%d,%d\n", index, lidar_distanceArray_Median[index]);
 		lidar_back_trig = 0;
-		if (lidar_distanceArray_Median[index] < LIDAR_TRIG_DETECT){
+		if (lidar_distanceArray_Median[index] < LIDAR_TRIG_DETECT) {
 			lidar_back_trig = 1;
 			break;
 		}
 	}
 
 	// front
-	for (int index = LIDAR_FRONT_MIN ; index < (CAMSENSE_X1_MAX_PAQUET + LIDAR_FRONT_MAX) ; index++){
+	for (int index = LIDAR_FRONT_MIN; index < (CAMSENSE_X1_MAX_PAQUET + LIDAR_FRONT_MAX); index++) {
 
 //		printf("%d,%d\n", index, lidar_distanceArray_Median[index]);
 		lidar_front_trig = 0;
-		if (lidar_distanceArray_Median[index % CAMSENSE_X1_MAX_PAQUET] < LIDAR_TRIG_DETECT){
+		if (lidar_distanceArray_Median[index % CAMSENSE_X1_MAX_PAQUET] < LIDAR_TRIG_DETECT) {
 			lidar_front_trig = 1;
 			break;
 		}
@@ -233,7 +248,7 @@ uint16_t getEncodeurValue(DigitalOut *chip_select) {
 	uint8_t receivedDataH = (0x3F & spiAS5047p.write(0xFF)); //Get the first part (8bits)
 	uint8_t receivedDataL = spiAS5047p.write(0xFF); //Get the second part (8bits)
 	chip_select->write(1);
-	return (uint16_t)((receivedDataH << 8) | (receivedDataL & 0xff)); //Combine the two parts to get a 16bits
+	return (uint16_t) ((receivedDataH << 8) | (receivedDataL & 0xff)); //Combine the two parts to get a 16bits
 }
 
 void encoderUpdate(int encoder) {
@@ -246,7 +261,7 @@ void encoderUpdate(int encoder) {
 	else
 		countNow = getEncodeurValue(&enc_right_cs);
 
-	int32_t countDelta = (int16_t)(countNow) - (int16_t)(countOld);
+	int32_t countDelta = (int16_t) (countNow) - (int16_t) (countOld);
 
 	enc_raw[encoder] = countNow;
 
@@ -263,7 +278,7 @@ void encoderUpdate(int encoder) {
 
 }
 
-void motorUpdate(int enc, DigitalOut *dir, PwmOut *motor, sixtron::PID *pid_motor, Biquad *filter, sixtron::PID_args *args){
+void motorUpdate(int enc, DigitalOut *dir, PwmOut *motor, sixtron::PID *pid_motor, Biquad *filter, sixtron::PID_args *args) {
 
 	motors_speed[enc] = filter->process((float((enc_count[enc]) - enc_old_count[enc])) / dt_pid);
 	enc_old_count[enc] = enc_count[enc];
@@ -285,17 +300,41 @@ void motorUpdate(int enc, DigitalOut *dir, PwmOut *motor, sixtron::PID *pid_moto
 	motor->write(motors_pwm[enc]);
 }
 
+void odometryUpdate() {
+
+	//compute curvilinear distance
+	int64_t new_distance = enc_count[ENC_LEFT] + enc_count[ENC_RIGHT];
+	int64_t delta_distance = new_distance - robot_distance;
+
+	//compute new angle value
+	int64_t new_angle = enc_count[ENC_LEFT] - enc_count[ENC_RIGHT] + robot_angle_offset;
+	int64_t delta_angle = new_angle - robot_angle;
+
+	//compute X/Y coordinates
+	float mid_angle = TICK2RAD(robot_angle + delta_angle / 2.0f);
+	float dx = float(delta_distance) * cos(mid_angle);
+	float dy = float(delta_distance) * sin(mid_angle);
+	robot_x += dx;
+	robot_y += dy;
+
+	//update global values
+	robot_angle = new_angle;
+	robot_distance = new_distance;
+	robot_linear_speed = delta_distance;
+	robot_angular_velocity = delta_angle;
+
+}
+
 void asservUpdate() {
 
 	// Convert current rate of the loop in seconds (float)
-	auto f_secs = std::chrono::duration_cast < std::chrono::duration < float >> (ASSERV_UPDATE_RATE);
+	auto f_secs = std::chrono::duration_cast<std::chrono::duration<float >>(ASSERV_UPDATE_RATE);
 	dt_pid = f_secs.count();
-
 
 
 	sixtron::PID_params pid_params;
 	pid_params.Kp = 0.0000011f;
-	pid_params.Ki = 0.00000003f;
+	pid_params.Ki = 0.000006f;
 	pid_params.Kd = 0.0f;
 	pid_params.dt_seconds = dt_pid;
 	pid_left = new sixtron::PID(pid_params);
@@ -316,27 +355,31 @@ void asservUpdate() {
 	old_count[ENC_LEFT] = enc_count[ENC_LEFT];
 	old_count[ENC_RIGHT] = enc_count[ENC_RIGHT];
 
-	int32_t yolo=0;
+	int32_t yolo = 0;
 
 	while (true) {
 		// Wait for trig
 		asservFlag.wait_any(ASSERV_FLAG);
-		yolo ++;
+		yolo++;
 		debug_pin = 1;
 
 		// Update lidar detect
 		updateLidarDetect();
-		led_out_green = !!lidar_front_trig ;
-		led_out_red = !!lidar_back_trig ;
+		led_out_green = !!lidar_front_trig;
+		led_out_red = !!lidar_back_trig;
 
 		// Update codeurs
 		encoderUpdate(ENC_LEFT);
 		encoderUpdate(ENC_RIGHT);
 
+		// Update odometry
+		odometryUpdate();
+
 		// Update target
-		if (yolo < 5000){
-			args_motor_left.target = 200000.0f;
-			args_motor_right.target = 400000.0f;
+//		if (yolo < 11000) {
+		if (robot_angle > (-1*TICK_PER_ROBOT_REVOL)){
+			args_motor_left.target = -500000.0f;
+			args_motor_right.target = 500000.0f;
 		} else {
 			args_motor_left.target = 0.0f;
 			args_motor_right.target = 0.0f;
@@ -391,14 +434,24 @@ int main() {
 //	ThisThread::sleep_for(2s);
 //	servoSetPwmDuty(SERVO0, MG996R_MAX);
 
+	motor_dir_left = 0;
+	motor_dir_right = 0;
+	motor_left = 0.0f;
+	motor_right = 0.0f;
+
+	ThisThread::sleep_for(2s);
 
 	// Setup Lidar Thread
 	serialLidarThread.start(callback(&serialLidarEventQueue, &EventQueue::dispatch_forever));
 	serialLidar.attach(&rxLidarCallback);
 
+	ThisThread::sleep_for(2s);
+
 	// asserv update (LAST TO BE SETUP)
 	asservThread.start(asservUpdate);
 	asservTicker.attach(&asservSetFlag, ASSERV_UPDATE_RATE);
+
+	ThisThread::sleep_for(2s);
 
 	// Main setup
 	mainLoopTicker.attach(&mainLoopUpdate, MAIN_LOOP_RATE);
@@ -410,10 +463,11 @@ int main() {
 
 
 		motor_dir_left != motor_dir_left;
-		printf("Pokirobot v1 alive since %ds (speed L = %f, speed R = %f) ...\n",
+		printf("Pokirobot v1 alive since %ds (X= %f, speed Y = %f, angle = %lld) ...\n",
 			   i++,
-			   motors_speed[ENC_LEFT],
-			   motors_speed[ENC_RIGHT]);
+			   TICK2MM(robot_x),
+			   TICK2MM(robot_y),
+			   robot_angle);
 
 //		for(int a =0 ; a<CAMSENSE_X1_MAX_PAQUET ; a++){
 //			printf("%d;%d\n", a, lidar_distanceArray_Median[a]);
