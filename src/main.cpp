@@ -36,11 +36,15 @@ EventQueue serialLidarEventQueue(1024 * EVENTS_EVENT_SIZE);
 EventFlags asservFlag;
 Ticker asservTicker;
 Thread asservThread(osPriorityRealtime);
-sixtron::PID *pid_left, *pid_right;
+sixtron::PID *pid_motor_left, *pid_motor_right;
+sixtron::PID *pid_dv, *pid_dteta;
 static float motors_speed[2] = {0.0f};
 static float motors_pwm[2] = {0.0f};
 static float dt_pid = 0.0f;
 Biquad filter_speed_left, filter_speed_right;
+float robot_target_speed, robot_target_angle;
+sixtron::PID_args args_motor_left, args_motor_right;
+sixtron::PID_args args_dv, args_dteta;
 
 // ENCODERS
 #define ENC_LEFT 0
@@ -68,7 +72,7 @@ DigitalOut motor_dir_left(PH_1);
 DigitalOut motor_dir_right(PA_4);
 
 // Main Debug
-#define MAIN_LOOP_RATE     500ms
+#define MAIN_LOOP_RATE     1000ms
 #define MAIN_LOOP_FLAG     0x01
 Ticker mainLoopTicker;
 EventFlags mainLoopFlag;
@@ -119,6 +123,7 @@ static uint8_t lidar_back_trig = 0, lidar_front_trig = 0;
 
 #define TICK_PER_ROBOT_REVOL    7340000
 #define THETA_TICK2DEG(tick) (((float(tick)) * 180.0f) / (float(TICK_PER_ROBOT_REVOL/2.0f)))
+#define THETA_DEG2TICK(deg) (((float(deg)) / 180.0f) * (float(TICK_PER_ROBOT_REVOL/2.0f)))
 
 static float robot_x = 0.0f, robot_y = 0.0f;
 static int64_t robot_distance = 0, robot_angle = 0, robot_angle_offset = 0;
@@ -324,8 +329,23 @@ void odometryUpdate() {
 	//update global values
 	robot_angle += delta_angle;
 	robot_distance += delta_distance;
-//	robot_linear_speed = delta_distance;
-//	robot_angular_velocity = delta_angle;
+	robot_linear_speed = delta_distance;
+	robot_angular_velocity = delta_angle;
+
+}
+
+void robotSpeedTargetSet(float speed_ms, float angle_ds, sixtron::PID_args * left, sixtron::PID_args *right){
+	// Convert in [./s]
+	float speed_tick_dt = (MM2TICK(speed_ms) * 1000.0f);
+	float angle_tick_dt  = (THETA_DEG2TICK(angle_ds));
+
+	// Asserv
+//	args_dteta.actual = THETA_TICK2DEG(robot_angle);
+//	args_dteta.target = angle_ds
+
+	// Set both motors speed
+	left->target = speed_tick_dt - (angle_tick_dt/2.0f);
+	right->target = speed_tick_dt + (angle_tick_dt/2.0f);
 
 }
 
@@ -336,18 +356,32 @@ void asservUpdate() {
 	dt_pid = f_secs.count();
 
 
-	sixtron::PID_params pid_params;
-	pid_params.Kp = 0.0000011f;
-	pid_params.Ki = 0.000006f;
-	pid_params.Kd = 0.0f;
-	pid_params.dt_seconds = dt_pid;
-	pid_left = new sixtron::PID(pid_params);
-	pid_right = new sixtron::PID(pid_params);
+	sixtron::PID_params pid_motor_params;
+	pid_motor_params.Kp = 0.0000011f;
+	pid_motor_params.Ki = 0.000006f;
+	pid_motor_params.Kd = 0.0f;
+	pid_motor_params.dt_seconds = dt_pid;
+	pid_motor_left = new sixtron::PID(pid_motor_params);
+	pid_motor_right = new sixtron::PID(pid_motor_params);
 
-	pid_left->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
-	pid_right->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
+	pid_motor_left->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
+	pid_motor_right->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
 
-	sixtron::PID_args args_motor_left, args_motor_right;
+
+	sixtron::PID_params pid_dv_params;
+	pid_dv_params.Kp = 1.0f;
+	pid_dv_params.Ki = 0.00000006f;
+	pid_dv_params.Kd = 0.0f;
+	pid_dv_params.dt_seconds = dt_pid;
+	pid_dv = new sixtron::PID(pid_dv_params);
+
+	sixtron::PID_params pid_dteta_params;
+	pid_dteta_params.Kp = 1.0f;
+	pid_dteta_params.Ki = 0.00000006f;
+	pid_dteta_params.Kd = 0.0f;
+	pid_dteta_params.dt_seconds = dt_pid;
+	pid_dteta = new sixtron::PID(pid_dteta_params);
+
 
 	// Update just in case
 	filter_speed_left.setBiquad(bq_type_lowpass, 20.0f * dt_pid, 0.707f, 0.0f);
@@ -380,61 +414,64 @@ void asservUpdate() {
 		// Update odometry
 		odometryUpdate();
 
+		// target Update
+//		robotSpeedTargetSet(0.0f, 45.0f, &args_motor_left, &args_motor_right);
+
 		// Update target
 
-		switch (carre) {
-			case 0:
-				args_motor_left.target = 500000.0f;
-				args_motor_right.target = 500000.0f;
-				if (TICK2MM(robot_x) > 500.0f)
-					carre++;
-				break;
-			case 1:
-				args_motor_left.target = 300000.0f;
-				args_motor_right.target = -300000.0f;
-				if (THETA_TICK2DEG(robot_angle) < -90.0f)
-					carre++;
-				break;
-			case 2:
-				args_motor_left.target = 500000.0f;
-				args_motor_right.target = 500000.0f;
-				if (TICK2MM(robot_y) < -500.0f)
-					carre++;
-				break;
-			case 3:
-				args_motor_left.target = 300000.0f;
-				args_motor_right.target = -300000.0f;
-				if (THETA_TICK2DEG(robot_angle) < -180.0f)
-					carre++;
-				break;
-			case 4:
-				args_motor_left.target = 500000.0f;
-				args_motor_right.target = 500000.0f;
-				if (TICK2MM(robot_x) < 0.0f)
-					carre++;
-				break;
-			case 5:
-				args_motor_left.target = 300000.0f;
-				args_motor_right.target = -300000.0f;
-				if (THETA_TICK2DEG(robot_angle) < -270.0f)
-					carre++;
-				break;
-			case 6:
-				args_motor_left.target = 500000.0f;
-				args_motor_right.target = 500000.0f;
-				if (TICK2MM(robot_y) > 0.0f)
-					carre++;
-				break;
-			case 7:
-				args_motor_left.target = 300000.0f;
-				args_motor_right.target = -300000.0f;
-				if (THETA_TICK2DEG(robot_angle) < -360.0f)
-					carre++;
-				break;
-			case 8:
-				args_motor_left.target = 0.0f;
-				args_motor_right.target = 0.0f;
-		}
+//		switch (carre) {
+//			case 0:
+//				args_motor_left.target = 500000.0f;
+//				args_motor_right.target = 500000.0f;
+//				if (TICK2MM(robot_x) > 500.0f)
+//					carre++;
+//				break;
+//			case 1:
+//				args_motor_left.target = 300000.0f;
+//				args_motor_right.target = -300000.0f;
+//				if (THETA_TICK2DEG(robot_angle) < -90.0f)
+//					carre++;
+//				break;
+//			case 2:
+//				args_motor_left.target = 500000.0f;
+//				args_motor_right.target = 500000.0f;
+//				if (TICK2MM(robot_y) < -500.0f)
+//					carre++;
+//				break;
+//			case 3:
+//				args_motor_left.target = 300000.0f;
+//				args_motor_right.target = -300000.0f;
+//				if (THETA_TICK2DEG(robot_angle) < -180.0f)
+//					carre++;
+//				break;
+//			case 4:
+//				args_motor_left.target = 500000.0f;
+//				args_motor_right.target = 500000.0f;
+//				if (TICK2MM(robot_x) < 0.0f)
+//					carre++;
+//				break;
+//			case 5:
+//				args_motor_left.target = 300000.0f;
+//				args_motor_right.target = -300000.0f;
+//				if (THETA_TICK2DEG(robot_angle) < -270.0f)
+//					carre++;
+//				break;
+//			case 6:
+//				args_motor_left.target = 500000.0f;
+//				args_motor_right.target = 500000.0f;
+//				if (TICK2MM(robot_y) > 0.0f)
+//					carre++;
+//				break;
+//			case 7:
+//				args_motor_left.target = 300000.0f;
+//				args_motor_right.target = -300000.0f;
+//				if (THETA_TICK2DEG(robot_angle) < -360.0f)
+//					carre++;
+//				break;
+//			case 8:
+//				args_motor_left.target = 0.0f;
+//				args_motor_right.target = 0.0f;
+//		}
 
 
 //		if (yolo < 5000) {
@@ -442,8 +479,8 @@ void asservUpdate() {
 
 
 		// Update motors
-		motorUpdate(ENC_LEFT, &motor_dir_left, &motor_left, pid_left, &filter_speed_left, &args_motor_left);
-		motorUpdate(ENC_RIGHT, &motor_dir_right, &motor_right, pid_right, &filter_speed_right, &args_motor_right);
+		motorUpdate(ENC_LEFT, &motor_dir_left, &motor_left, pid_motor_left, &filter_speed_left, &args_motor_left);
+		motorUpdate(ENC_RIGHT, &motor_dir_right, &motor_right, pid_motor_right, &filter_speed_right, &args_motor_right);
 
 		debug_pin = 0;
 	}
