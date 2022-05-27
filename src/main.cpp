@@ -30,13 +30,20 @@ UnbufferedSerial serialLidar(PA_9, PA_10, 115200);
 Thread serialLidarThread;
 EventQueue serialLidarEventQueue(1024 * EVENTS_EVENT_SIZE);
 
+// Bluetooth
+UnbufferedSerial serialBT(PC_6, PC_7, 9600);
+Thread serialBTThread;
+EventQueue serialBTEventQueue;
+float ctrl_angle = 0.0f;
+float ctrl_speed = 0.0f;
+
 // ASSERV UPDATE
 #define ASSERV_UPDATE_RATE  1ms
 #define ASSERV_FLAG     0x02
-#define PID_DV_PRECISION	5.0f
-#define PID_TETA_PRECISION	2.0f
-#define GOTO_IN_PROGRESS	0
-#define GOTO_DONE			1
+#define PID_DV_PRECISION    5.0f
+#define PID_TETA_PRECISION    2.0f
+#define GOTO_IN_PROGRESS    0
+#define GOTO_DONE            1
 EventFlags asservFlag;
 Ticker asservTicker;
 Thread asservThread(osPriorityRealtime);
@@ -323,10 +330,10 @@ void odometryUpdate() {
 	//compute new angle value
 	int64_t new_angle = (enc_count[ENC_RIGHT] - enc_count[ENC_LEFT]);
 
-	while(THETA_TICK2DEG(new_angle) > 180.0f){
+	while (THETA_TICK2DEG(new_angle) > 180.0f) {
 		new_angle -= int64_t(THETA_DEG2TICK(360.0f));
 	}
-	while(THETA_TICK2DEG(new_angle) < -180.0f){
+	while (THETA_TICK2DEG(new_angle) < -180.0f) {
 		new_angle += int64_t(THETA_DEG2TICK(360.0f));
 	}
 
@@ -335,8 +342,8 @@ void odometryUpdate() {
 
 	//compute X/Y coordinates
 	float mid_angle = THETA_TICK2DEG(robot_angle + delta_angle / 2.0f);
-	float dx = float(delta_distance) * cosf(mid_angle/180.0f*float(M_PI));
-	float dy = float(delta_distance) * sinf(mid_angle/180.0f*float(M_PI));
+	float dx = float(delta_distance) * cosf(mid_angle / 180.0f * float(M_PI));
+	float dy = float(delta_distance) * sinf(mid_angle / 180.0f * float(M_PI));
 	robot_x += dx;
 	robot_y += dy;
 
@@ -345,10 +352,10 @@ void odometryUpdate() {
 	//update global values
 	robot_angle += delta_angle;
 
-	while(THETA_TICK2DEG(robot_angle) > 180.0f){
+	while (THETA_TICK2DEG(robot_angle) > 180.0f) {
 		robot_angle -= int64_t(THETA_DEG2TICK(360.0f));
 	}
-	while(THETA_TICK2DEG(robot_angle) < -180.0f){
+	while (THETA_TICK2DEG(robot_angle) < -180.0f) {
 		robot_angle += int64_t(THETA_DEG2TICK(360.0f));
 	}
 
@@ -358,30 +365,30 @@ void odometryUpdate() {
 
 }
 
-void robotSpeedTargetSet(float speed_ms, float angle, sixtron::PID_args * left, sixtron::PID_args *right){
+void robotSpeedTargetSet(float speed_ms, float angle, sixtron::PID_args *left, sixtron::PID_args *right) {
 	// Convert in [./s]
 	float speed_tick_dt = (MM2TICK(speed_ms) * 1000.0f);
-	float angle_tick  = (THETA_DEG2TICK(angle));
+	float angle_tick = (THETA_DEG2TICK(angle));
 
 	// Set both motors speed
-	left->target = speed_tick_dt - (angle_tick/2.0f);
-	right->target = speed_tick_dt + (angle_tick/2.0f);
+	left->target = speed_tick_dt - (angle_tick / 2.0f);
+	right->target = speed_tick_dt + (angle_tick / 2.0f);
 
 }
 
-int robotTargetTHETA(float target_angle_deg){
+int robotTargetTHETA(float target_angle_deg) {
 
 	float e_ang = THETA_TICK2DEG(robot_angle) - target_angle_deg;
 
 	//	 Cap between -180 and +180 deg
-	while((e_ang) > 180.0f){
+	while ((e_ang) > 180.0f) {
 		e_ang -= 360.0f;
 	}
-	while((e_ang) < -180.0f){
+	while ((e_ang) < -180.0f) {
 		e_ang += 360.0f;
 	}
 
-	if(fabs(e_ang) < PID_TETA_PRECISION){
+	if (fabs(e_ang) < PID_TETA_PRECISION) {
 		args_dteta.output = 0.0f;
 		return GOTO_DONE;
 	} else {
@@ -394,9 +401,10 @@ int robotTargetTHETA(float target_angle_deg){
 }
 
 uint8_t pid_dv_off = 0, first_angle = 1, cap_dv = 0;
-int robotTargetXY(float target_x_mm, float target_y_mm){
+int robotTargetXY(float target_x_mm, float target_y_mm) {
 
-	float target_angle = (atan2f((target_y_mm - TICK2MM(robot_y)),(target_x_mm - TICK2MM(robot_x)))) * 180.0f / float(M_PI); // repère indirect donc moins
+	float target_angle = (atan2f((target_y_mm - TICK2MM(robot_y)), (target_x_mm - TICK2MM(robot_x)))) * 180.0f /
+						 float(M_PI); // repère indirect donc moins
 	float e_ang = THETA_TICK2DEG(robot_angle) - target_angle;
 	static float e_ang_old = 0.0f;
 
@@ -404,14 +412,14 @@ int robotTargetXY(float target_x_mm, float target_y_mm){
 
 
 //	 Cap between -180 and +180 deg
-	while((e_ang) > 180.0f){
+	while ((e_ang) > 180.0f) {
 		e_ang -= 360.0f;
 	}
-	while((e_ang) < -180.0f){
+	while ((e_ang) < -180.0f) {
 		e_ang += 360.0f;
 	}
 
-	if(fabs(e_ang) > PID_TETA_PRECISION){
+	if (fabs(e_ang) > PID_TETA_PRECISION) {
 		pid_dv_off = 1;
 		first_angle = 0;
 	}
@@ -446,11 +454,11 @@ int robotTargetXY(float target_x_mm, float target_y_mm){
 			pid_dv->compute(&args_dv);
 		}
 
-	} else{
-		if (first_angle){
+	} else {
+		if (first_angle) {
 			args_dv.output = 0.0f;
 		} else {
-			if(cap_dv){
+			if (cap_dv) {
 				args_dv.output = args_dv.output * 0.80f;
 				cap_dv = 0;
 			}
@@ -529,46 +537,47 @@ void asservUpdate() {
 
 		// target calcul
 
-		float square_size = 3000.0f;
+//		float square_size = 3000.0f;
 
-		switch (carre) {
-			case 0:
-				if (robotTargetXY(500.0f,0.0f)){
-					carre++;
-					printf("END TARGET X=500, Y=0\n");
-				}
-				break;
-			case 1:
-				if (robotTargetXY(500.0f,500.0f)){
-					carre++;
-					printf("END TARGET X=500, Y=500\n");
-				}
-				break;
-			case 2:
-				if (robotTargetXY(0.0f,500.0f)){
-					carre++;
-					printf("END TARGET X=0, Y=500\n");
-				}
-				break;
-			case 3:
-				if (robotTargetXY(0.0f,0.0f)){
-					carre++;
-					printf("END TARGET X=0, Y=0\n");
-				}
-				break;
-			case 4:
-				if (robotTargetXY(3000.0f,0.0f)){
-					carre = 0;
-					printf("END TARGET X=3000.0f Y=0\n");
-				}
-				break;
-			case 5:
-				robotTargetTHETA(-180.0f);
-				break;
-		}
+//		switch (carre) {
+//			case 0:
+//				if (robotTargetXY(500.0f, 0.0f)) {
+//					carre++;
+//					printf("END TARGET X=500, Y=0\n");
+//				}
+//				break;
+//			case 1:
+//				if (robotTargetXY(500.0f, 500.0f)) {
+//					carre++;
+//					printf("END TARGET X=500, Y=500\n");
+//				}
+//				break;
+//			case 2:
+//				if (robotTargetXY(0.0f, 500.0f)) {
+//					carre++;
+//					printf("END TARGET X=0, Y=500\n");
+//				}
+//				break;
+//			case 3:
+//				if (robotTargetXY(0.0f, 0.0f)) {
+//					carre++;
+//					printf("END TARGET X=0, Y=0\n");
+//				}
+//				break;
+//			case 4:
+//				if (robotTargetXY(3000.0f, 0.0f)) {
+//					carre = 0;
+//					printf("END TARGET X=3000.0f Y=0\n");
+//				}
+//				break;
+//			case 5:
+//				robotTargetTHETA(-180.0f);
+//				break;
+//		}
 
 		// target Update for each motor
-		robotSpeedTargetSet(args_dv.output, args_dteta.output, &args_motor_left, &args_motor_right);
+//		robotSpeedTargetSet(args_dv.output, args_dteta.output, &args_motor_left, &args_motor_right);
+		robotSpeedTargetSet((2.0f/127.0f)*ctrl_speed, (180.0f/127.0f)*ctrl_angle, &args_motor_left, &args_motor_right);
 
 		// Update motors
 		motorUpdate(ENC_LEFT, &motor_dir_left, &motor_left, pid_motor_left, &filter_speed_left, &args_motor_left);
@@ -586,6 +595,67 @@ void asservSetFlag() {
 // Update main
 void mainLoopUpdate() {
 	mainLoopFlag.set(MAIN_LOOP_FLAG);
+}
+
+uint8_t bt_mode = 0;
+char header_one = 0;
+char header_two = 0;
+void process_serialBTTX(char carac) {
+
+	if (bt_mode == 0) {
+		header_one = carac;
+		bt_mode++;
+		if(carac == '\n'){
+			bt_mode = 0;
+		}
+	} else if (bt_mode == 1) {
+		header_two = carac;
+		bt_mode++;
+		if(carac == '\n'){
+			bt_mode = 0;
+		}
+	} else if (bt_mode == 2) {
+
+		uint8_t value = carac;
+		bt_mode++;
+//		uint16_t bt_header = (header_one << 8) | header_two;
+
+		if (header_one == 'R'){
+			if(header_two == 'X'){
+				ctrl_angle = (255.0f - float(value)) - 127.0f;
+//				printf("ctrl angle %f\n", ctrl_angle);
+			}
+		}
+
+		if (header_one == 'L'){
+			if(header_two == 'Y'){
+				ctrl_speed = (255.0f - float(value)) - 127.0f;
+//				printf("ctrl angle %f\n", ctrl_speed);
+			}
+		}
+
+		if(carac == '\n'){
+			bt_mode = 0;
+		}
+
+	} else if (bt_mode==3){
+
+
+		if(carac == '\n'){
+			bt_mode = 0;
+		}
+
+	}
+
+
+}
+
+void rxBTCallback() {
+
+	char c;
+	if (serialBT.read(&c, 1)) {
+		serialBTEventQueue.call(process_serialBTTX, c);
+	}
 }
 
 int main() {
@@ -632,6 +702,12 @@ int main() {
 
 	ThisThread::sleep_for(2s);
 
+	// Setup BT Thread
+	serialBTThread.start(callback(&serialBTEventQueue, &EventQueue::dispatch_forever));
+	serialBT.attach(&rxBTCallback);
+
+	ThisThread::sleep_for(2s);
+
 	// asserv update (LAST TO BE SETUP)
 	asservThread.start(asservUpdate);
 	asservTicker.attach(&asservSetFlag, ASSERV_UPDATE_RATE);
@@ -648,16 +724,16 @@ int main() {
 
 
 		motor_dir_left != motor_dir_left;
-		printf("Pokirobot v1 alive since %ds (X= %f, dx=%f, Y = %f, angle = %f, error_dteta = %f, dv_off = %d, error_dv = %f, dv_output = %f) ...\n",
-			   i++,
-			   TICK2MM(robot_x),
-			   debug_values[2],
-			   TICK2MM(robot_y),
-			   THETA_TICK2DEG(robot_angle),
-			   debug_values[0],
-			   pid_dv_off,
-			   debug_values[1],
-			   args_dv.output);
+//		printf("Pokirobot v1 alive since %ds (X= %f, dx=%f, Y = %f, angle = %f, error_dteta = %f, dv_off = %d, error_dv = %f, dv_output = %f) ...\n",
+//			   i++,
+//			   TICK2MM(robot_x),
+//			   debug_values[2],
+//			   TICK2MM(robot_y),
+//			   THETA_TICK2DEG(robot_angle),
+//			   debug_values[0],
+//			   pid_dv_off,
+//			   debug_values[1],
+//			   args_dv.output);
 
 //		for(int a =0 ; a<CAMSENSE_X1_MAX_PAQUET ; a++){
 //			printf("%d;%d\n", a, lidar_distanceArray_Median[a]);
