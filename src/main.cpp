@@ -33,6 +33,7 @@ EventQueue serialLidarEventQueue(1024 * EVENTS_EVENT_SIZE);
 // ASSERV UPDATE
 #define ASSERV_UPDATE_RATE  1ms
 #define ASSERV_FLAG     0x02
+#define PID_DV_PRECISION	5.0f
 EventFlags asservFlag;
 Ticker asservTicker;
 Thread asservThread(osPriorityRealtime);
@@ -334,20 +335,57 @@ void odometryUpdate() {
 
 }
 
-void robotSpeedTargetSet(float speed_ms, float angle_ds, sixtron::PID_args * left, sixtron::PID_args *right){
+void robotSpeedTargetSet(float speed_ms, float angle, sixtron::PID_args * left, sixtron::PID_args *right){
 	// Convert in [./s]
 	float speed_tick_dt = (MM2TICK(speed_ms) * 1000.0f);
-	float angle_tick_dt  = (THETA_DEG2TICK(angle_ds));
-
-	// Asserv
-//	args_dteta.actual = THETA_TICK2DEG(robot_angle);
-//	args_dteta.target = angle_ds
+	float angle_tick  = (THETA_DEG2TICK(angle));
 
 	// Set both motors speed
-	left->target = speed_tick_dt - (angle_tick_dt/2.0f);
-	right->target = speed_tick_dt + (angle_tick_dt/2.0f);
+	left->target = speed_tick_dt - (angle_tick/2.0f);
+	right->target = speed_tick_dt + (angle_tick/2.0f);
 
 }
+
+void robotTargetCompute(float target_x_mm, float target_y_mm){
+
+	float target_angle = (atan2((target_y_mm - TICK2MM(robot_y)),(target_x_mm - TICK2MM(robot_x)))) * 180.0f / float(M_PI); // repère indirect donc moins
+	float e_ang = THETA_TICK2DEG(robot_angle) - target_angle;
+	uint8_t pid_dv_off = 0;
+
+	if(fabs(e_ang) > 5.0f){
+		pid_dv_off = 1;
+	}
+
+	// pid teta
+	args_dteta.actual = THETA_TICK2DEG(robot_angle);
+	args_dteta.target = target_angle;
+	pid_dteta->compute(&args_dteta);
+
+
+	if (!pid_dv_off) {
+		float e_x = target_x_mm - TICK2MM(robot_x);
+		float e_y = target_y_mm - TICK2MM(robot_y);
+
+		float error = sqrtf((e_x * e_x) + (e_y * e_y));
+
+		if (error < PID_DV_PRECISION) {
+			args_dv.output = 0.0f;
+		} else {
+			// pid dv
+			args_dv.actual = -error;
+			args_dv.target = 0.0f;
+			pid_dv->compute(&args_dv);
+		}
+	}
+
+}
+
+//void robot_goto(float target_x_mm, float target_y_mm){
+//
+//
+//
+//
+//}
 
 void asservUpdate() {
 
@@ -369,15 +407,15 @@ void asservUpdate() {
 
 
 	sixtron::PID_params pid_dv_params;
-	pid_dv_params.Kp = 1.0f;
-	pid_dv_params.Ki = 0.00000006f;
+	pid_dv_params.Kp = 0.0008f;
+	pid_dv_params.Ki = 0.00000000001f;
 	pid_dv_params.Kd = 0.0f;
 	pid_dv_params.dt_seconds = dt_pid;
 	pid_dv = new sixtron::PID(pid_dv_params);
 
 	sixtron::PID_params pid_dteta_params;
-	pid_dteta_params.Kp = 1.0f;
-	pid_dteta_params.Ki = 0.00000006f;
+	pid_dteta_params.Kp = 0.9f;
+	pid_dteta_params.Ki = 0.0000004f;
 	pid_dteta_params.Kd = 0.0f;
 	pid_dteta_params.dt_seconds = dt_pid;
 	pid_dteta = new sixtron::PID(pid_dteta_params);
@@ -414,8 +452,11 @@ void asservUpdate() {
 		// Update odometry
 		odometryUpdate();
 
+		// target calcul
+		robotTargetCompute(500.0f, -500.0f);
+
 		// target Update
-//		robotSpeedTargetSet(0.0f, 45.0f, &args_motor_left, &args_motor_right);
+		robotSpeedTargetSet(args_dv.output, args_dteta.output, &args_motor_left, &args_motor_right);
 
 		// Update target
 
@@ -556,12 +597,12 @@ int main() {
 
 
 		motor_dir_left != motor_dir_left;
-		printf("Pokirobot v1 alive since %ds (X= %f, speed Y = %f, angle = %f, codeur = %lld) ...\n",
+		printf("Pokirobot v1 alive since %ds (X= %f, Y = %f, angle = %f, error_dv = %f) ...\n",
 			   i++,
 			   TICK2MM(robot_x),
 			   TICK2MM(robot_y),
 			   THETA_TICK2DEG(robot_angle),
-			   enc_count[ENC_RIGHT]);
+			   (args_dv.actual - args_dv.target));
 
 //		for(int a =0 ; a<CAMSENSE_X1_MAX_PAQUET ; a++){
 //			printf("%d;%d\n", a, lidar_distanceArray_Median[a]);
