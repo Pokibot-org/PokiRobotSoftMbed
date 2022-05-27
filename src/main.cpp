@@ -34,6 +34,7 @@ EventQueue serialLidarEventQueue(1024 * EVENTS_EVENT_SIZE);
 #define ASSERV_UPDATE_RATE  1ms
 #define ASSERV_FLAG     0x02
 #define PID_DV_PRECISION	5.0f
+#define PID_TETA_PRECISION	2.0f
 #define GOTO_IN_PROGRESS	0
 #define GOTO_DONE			1
 EventFlags asservFlag;
@@ -380,7 +381,7 @@ int robotTargetTHETA(float target_angle_deg){
 		e_ang += 360.0f;
 	}
 
-	if(fabs(e_ang) < 3.0f){
+	if(fabs(e_ang) < PID_TETA_PRECISION){
 		args_dteta.output = 0.0f;
 		return GOTO_DONE;
 	} else {
@@ -392,7 +393,7 @@ int robotTargetTHETA(float target_angle_deg){
 	}
 }
 
-uint8_t pid_dv_off = 0;
+uint8_t pid_dv_off = 0, first_angle = 1, cap_dv = 0;
 int robotTargetXY(float target_x_mm, float target_y_mm){
 
 	float target_angle = (atan2f((target_y_mm - TICK2MM(robot_y)),(target_x_mm - TICK2MM(robot_x)))) * 180.0f / float(M_PI); // repère indirect donc moins
@@ -400,7 +401,6 @@ int robotTargetXY(float target_x_mm, float target_y_mm){
 	static float e_ang_old = 0.0f;
 
 	pid_dv_off = 0;
-
 
 
 //	 Cap between -180 and +180 deg
@@ -411,8 +411,9 @@ int robotTargetXY(float target_x_mm, float target_y_mm){
 		e_ang += 360.0f;
 	}
 
-	if(fabs(e_ang) > 5.0f){
+	if(fabs(e_ang) > PID_TETA_PRECISION){
 		pid_dv_off = 1;
+		first_angle = 0;
 	}
 
 //	e_ang_old = e_ang;
@@ -427,6 +428,7 @@ int robotTargetXY(float target_x_mm, float target_y_mm){
 	debug_values[0] = e_ang;
 
 	if (!pid_dv_off) {
+		cap_dv = 1;// reset cap dv for next round, if angle is to be correct
 		float e_x = target_x_mm - TICK2MM(robot_x);
 		float e_y = target_y_mm - TICK2MM(robot_y);
 
@@ -435,12 +437,23 @@ int robotTargetXY(float target_x_mm, float target_y_mm){
 
 		if (error < PID_DV_PRECISION) {
 			args_dv.output = 0.0f;
+			first_angle = 1;
 			return GOTO_DONE;
 		} else {
 			// pid dv
 			args_dv.actual = -error;
 			args_dv.target = 0.0f;
 			pid_dv->compute(&args_dv);
+		}
+
+	} else{
+		if (first_angle){
+			args_dv.output = 0.0f;
+		} else {
+			if(cap_dv){
+				args_dv.output = args_dv.output * 0.80f;
+				cap_dv = 0;
+			}
 		}
 
 	}
@@ -462,21 +475,23 @@ void asservUpdate() {
 	pid_motor_left = new sixtron::PID(pid_motor_params);
 	pid_motor_right = new sixtron::PID(pid_motor_params);
 
-	pid_motor_left->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
-	pid_motor_right->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
+	pid_motor_left->setLimit(sixtron::PID_limit::output_limit_HL, 0.6f);
+	pid_motor_right->setLimit(sixtron::PID_limit::output_limit_HL, 0.6f);
 
 
 	sixtron::PID_params pid_dv_params;
-	pid_dv_params.Kp = 0.0008f;
-	pid_dv_params.Ki = 0.00000000001f;
-	pid_dv_params.Kd = 0.0f;
+	pid_dv_params.Kp = 0.0015f;
+	pid_dv_params.Ki = 0.0000000001f;
+	pid_dv_params.Kd = 0.0001f;
 	pid_dv_params.dt_seconds = dt_pid;
 	pid_dv = new sixtron::PID(pid_dv_params);
 
+	pid_dv->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
+
 	sixtron::PID_params pid_dteta_params;
-	pid_dteta_params.Kp = 0.9f;
+	pid_dteta_params.Kp = 2.5f;
 	pid_dteta_params.Ki = 0.0000004f;
-	pid_dteta_params.Kd = 0.0f;
+	pid_dteta_params.Kd = 0.0000001f;
 	pid_dteta_params.dt_seconds = dt_pid;
 	pid_dteta = new sixtron::PID(pid_dteta_params);
 
@@ -514,6 +529,8 @@ void asservUpdate() {
 
 		// target calcul
 
+		float square_size = 3000.0f;
+
 		switch (carre) {
 			case 0:
 				if (robotTargetXY(500.0f,0.0f)){
@@ -540,7 +557,13 @@ void asservUpdate() {
 				}
 				break;
 			case 4:
-				robotTargetTHETA(0.0f);
+				if (robotTargetXY(3000.0f,0.0f)){
+					carre = 0;
+					printf("END TARGET X=3000.0f Y=0\n");
+				}
+				break;
+			case 5:
+				robotTargetTHETA(-180.0f);
 				break;
 		}
 
@@ -625,7 +648,7 @@ int main() {
 
 
 		motor_dir_left != motor_dir_left;
-		printf("Pokirobot v1 alive since %ds (X= %f, dx=%f, Y = %f, angle = %f, error_dteta = %f, dv_off = %d, error_dv = %f) ...\n",
+		printf("Pokirobot v1 alive since %ds (X= %f, dx=%f, Y = %f, angle = %f, error_dteta = %f, dv_off = %d, error_dv = %f, dv_output = %f) ...\n",
 			   i++,
 			   TICK2MM(robot_x),
 			   debug_values[2],
@@ -633,7 +656,8 @@ int main() {
 			   THETA_TICK2DEG(robot_angle),
 			   debug_values[0],
 			   pid_dv_off,
-			   debug_values[1]);
+			   debug_values[1],
+			   args_dv.output);
 
 //		for(int a =0 ; a<CAMSENSE_X1_MAX_PAQUET ; a++){
 //			printf("%d;%d\n", a, lidar_distanceArray_Median[a]);

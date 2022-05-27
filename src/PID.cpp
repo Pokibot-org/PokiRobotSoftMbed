@@ -31,7 +31,7 @@ namespace sixtron {
 			_kd(Kd),
 			_kf(Kf),
 			_target_clamped(0.0f),
-			_target_delta_limit(2000.0f),
+			_target_delta_limit(5000.0f),
 			_err(0.0f),
 			_err_previous(0.0f),
 			_i_count(0.0f),
