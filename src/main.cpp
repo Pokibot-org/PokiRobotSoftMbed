@@ -483,23 +483,23 @@ void asservUpdate() {
 	pid_motor_left = new sixtron::PID(pid_motor_params);
 	pid_motor_right = new sixtron::PID(pid_motor_params);
 
-	pid_motor_left->setLimit(sixtron::PID_limit::output_limit_HL, 0.6f);
-	pid_motor_right->setLimit(sixtron::PID_limit::output_limit_HL, 0.6f);
+	pid_motor_left->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
+	pid_motor_right->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
 
 
 	sixtron::PID_params pid_dv_params;
 	pid_dv_params.Kp = 0.0015f;
-	pid_dv_params.Ki = 0.0000000001f;
-	pid_dv_params.Kd = 0.0001f;
+//	pid_dv_params.Ki = 0.0000000001f;
+//	pid_dv_params.Kd = 0.0001f;
 	pid_dv_params.dt_seconds = dt_pid;
 	pid_dv = new sixtron::PID(pid_dv_params);
 
-	pid_dv->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
+//	pid_dv->setLimit(sixtron::PID_limit::output_limit_HL, 1.0f);
 
 	sixtron::PID_params pid_dteta_params;
 	pid_dteta_params.Kp = 2.5f;
-	pid_dteta_params.Ki = 0.0000004f;
-	pid_dteta_params.Kd = 0.0000001f;
+//	pid_dteta_params.Ki = 0.0000004f;
+//	pid_dteta_params.Kd = 0.0000001f;
 	pid_dteta_params.dt_seconds = dt_pid;
 	pid_dteta = new sixtron::PID(pid_dteta_params);
 
@@ -577,7 +577,7 @@ void asservUpdate() {
 
 		// target Update for each motor
 //		robotSpeedTargetSet(args_dv.output, args_dteta.output, &args_motor_left, &args_motor_right);
-		robotSpeedTargetSet((2.0f/127.0f)*ctrl_speed, (180.0f/127.0f)*ctrl_angle, &args_motor_left, &args_motor_right);
+		robotSpeedTargetSet((1.0f/127.0f)*ctrl_speed, (90.0f/127.0f)*ctrl_angle, &args_motor_left, &args_motor_right);
 
 		// Update motors
 		motorUpdate(ENC_LEFT, &motor_dir_left, &motor_left, pid_motor_left, &filter_speed_left, &args_motor_left);
