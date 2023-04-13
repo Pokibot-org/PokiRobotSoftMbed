@@ -1,5 +1,5 @@
-# PokiRobotSoftMbed
-This is a FEUO (For Emergency Use Only) Mbed repository to get a basic working PokiRobot soft.
+# PokiRobotSoftMbed (2022)
+This is a FEUO (For Emergency Use Only) Mbed repository to get a basic working PokiRobot soft during the Eurobot 2022.
 
 Consider this as a "sandbox example" to use STM32 modules through MBED on the robot.
 
